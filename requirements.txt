@@ -1,0 +1,11 @@
+numpy
+scipy
+nibabel
+nilearn
+scikit-image
+matplotlib
+plotly
+mpmath
+lapy
+trimesh
+meshio
