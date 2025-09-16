@@ -346,7 +346,7 @@ def pick_alpha_or_fallback(vals, band=(8.0, 13.0), wide=(5.0, 20.0)):
 def main():
     # 设置数据目录
     #BASE_PATH = '/mnt/'
-    BASE_PATH = '/home/wmy/work/geometry/data/'
+    BASE_PATH = '/home/wmy/Documents/'
     sub = '100307'
     resting_data_dir = os.path.join(BASE_PATH, 'Resting_1', sub)
     struct_data_dir = os.path.join(BASE_PATH, 'Structure', sub)
