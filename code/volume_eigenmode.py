@@ -70,14 +70,9 @@ def merge_tet_meshes(tet_list):
     手动合并多个 TetMesh 对象。
 
     参数
-    ----
-    tet_list : list of TetMesh
-        每个对象都有 v (顶点) 和 t (四面体)
-
+        tet_list : list of TetMesh 其中每个对象都有 v (顶点) 和 t (四面体)
     返回
-    ----
-    TetMesh
-        合并后的单一四面体网格
+        TetMesh
     """
     all_verts = []
     all_tets = []
@@ -108,18 +103,8 @@ def compute_merged_nuclei_eigenmodes(struct_data_dir, nuclei_dict, num_modes=10)
     """
     分别为多个脑区生成 tetrahedral 网格并合并，再计算本征模。
     
-    参数
-    ----
-    struct_data_dir : str
-        解剖数据目录，必须包含 wmparc.nii.gz
-    nuclei_dict : dict
-        键为名称，值为 FreeSurfer label 列表，如 {"左尾状核": [11], "左壳核": [12]}
-    num_modes : int
-        要计算的特征模数量
-    
     返回
-    ----
-    evals, emodes, tet : np.ndarray, np.ndarray, TetMesh
+        evals, emodes, tet : np.ndarray, np.ndarray, TetMesh
     """
     from lapy import TetMesh, Solver
 
@@ -324,86 +309,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-#wrong smooth and projecting
-'''def project_emode_to_volume(tet, emode_values, mask_img, smooth_sigma=1.0):
-    """
-    将四面体网格的本征模值投影到mask对应的体积空间。
-    参数
-    ----
-    tet : lapy.TetMesh
-        四面体网格对象
-    emode_values : np.ndarray
-        对应每个网格顶点的模态值 (N,)
-    mask_img : nib.Nifti1Image
-        原始核团掩码
-    smooth_sigma : float
-        高斯平滑系数
-    返回
-    ----
-    emode_volume : 3D numpy array
-        投影到体积空间的模态值
-    """
-    mask_data = mask_img.get_fdata()
-    shape = mask_data.shape
-    affine = mask_img.affine
-
-    print("TetMesh vertex range:", np.min(tet.v, axis=0), np.max(tet.v, axis=0))
-    print("Mask voxel-to-world origin:", mask_img.affine)
-    print("Mask shape:", mask_img.shape)
-    
-    # 获取mask内体素坐标（世界坐标）
-    voxel_coords = np.array(np.nonzero(mask_data)).T
-    world_coords = nib.affines.apply_affine(affine, voxel_coords)
-
-    # 插值
-    interpolated = griddata(tet.v, emode_values, world_coords, method='linear', fill_value=0)
-
-    emode_volume = np.zeros(shape)
-    emode_volume[mask_data > 0] = interpolated
-
-    # 平滑
-    if smooth_sigma > 0:
-        emode_volume = gaussian_filter(emode_volume, sigma=smooth_sigma)
-
-    return emode_volume
-
-
-def visualize_emode_on_volume_mesh(emode_volume, affine, output_file="emode_surface.html"):
-    """
-    将投影后的本征模体积数据可视化为表面Mesh3d。
-    """
-
-    print("emode_volume min:", np.min(emode_volume))
-    print("emode_volume max:", np.max(emode_volume))
-    print("Non-zero voxels:", np.count_nonzero(emode_volume))
-
-    verts, faces, _, _ = measure.marching_cubes(emode_volume, level = (emode_volume.min() + emode_volume.max()) / 2)
-    verts_world = nib.affines.apply_affine(affine, verts)
-
-    mesh_trace = go.Mesh3d(
-        x=verts_world[:, 0],
-        y=verts_world[:, 1],
-        z=verts_world[:, 2],
-        i=faces[:, 0],
-        j=faces[:, 1],
-        k=faces[:, 2],
-        intensity=emode_volume[tuple(verts.astype(int).T)],
-        colorscale=[[0, 'blue'], [0.5, 'white'], [1, 'red']],
-        opacity=0.9,
-        showscale=True
-    )
-    fig = go.Figure([mesh_trace])
-    fig.update_layout(scene=dict(xaxis=dict(visible=False),
-                                 yaxis=dict(visible=False),
-                                 zaxis=dict(visible=False)),
-                      title="Projected Volume Eigenmode")
-    
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    fig.write_html(output_file)
-    print(f"已保存：{output_file}")
-'''
-#main():
-'''print("emodes min:", emodes[:,0].min(), "max:", emodes[:,0].max())
-emode_volume = project_emode_to_volume(tet, emodes[:, 0], subcortical_img)
-visualize_emode_on_volume_mesh(emode_volume, subcortical_img.affine, output_file="/home/wmy/work/geometry/volume_modes/projected_mode_1.html")'''

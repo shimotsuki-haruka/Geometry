@@ -2,6 +2,7 @@ import numpy as np
 import os
 import plotly.graph_objects as go
 import mpmath as mp
+import matplotlib.pyplot as plt
 from numpy.linalg import lstsq
 from typing import Dict, List, Tuple
 from plotly.subplots import make_subplots
@@ -14,24 +15,16 @@ def calc_eig_from_vertices_faces(vertices, faces, num_modes=20):
     
     参数
     ----
-    vertices : np.ndarray (N x 3)
-        网格顶点坐标
-    faces : np.ndarray (M x 3)
-        网格三角面片（顶点索引）
-    num_modes : int
-        需要计算的特征模态数量
+    vertices : np.ndarray (N x 3)  网格顶点坐标
+    faces : np.ndarray (M x 3)  网格三角面片（顶点索引）
+    num_modes : int  需要计算的特征模态数量
         
     返回
     ----
-    evals : np.ndarray (num_modes,)
-        特征值
-    emodes : np.ndarray (N x num_modes)
-        特征模态
+    evals : np.ndarray (num_modes,)  特征值
+    emodes : np.ndarray (N x num_modes)  特征模态
     """
-    # 将输入传给 lapy 的 TriaMesh
     tria = TriaMesh(vertices, faces)
-    
-    # 求解特征值和特征模态
     fem = Solver(tria)
     evals, emodes = fem.eigs(k=num_modes)
     return evals, emodes
@@ -39,31 +32,22 @@ def calc_eig_from_vertices_faces(vertices, faces, num_modes=20):
 
 def visualize_surface_eigenmodes(vertices, faces, emodes):
     """
-    可视化脑表面的特征模态。
+    可视化脑表面的特征模态。可以通过修改col、height、width来调整子图布局/大小
     
     参数
     ----
-    vertices : np.ndarray (N x 3)
-        网格顶点坐标
-    faces : np.ndarray (M x 3)
-        网格三角形面片
-    emodes : np.ndarray (N x K)
-        特征模态矩阵 (每列为一个模态)
-    num_modes : int
-        可视化的模态数量
-    multi_plot : bool
-        True：在一张图中显示多个模态
-        False：每个模态生成一个单独的 HTML 文件
-    output_dir : str
-        保存输出文件的目录
-    可以通过修改col、height、width来调整子图布局/大小
+    vertices : np.ndarray (N x 3)  网格顶点坐标
+    faces : np.ndarray (M x 3)  网格三角形面片
+    emodes : np.ndarray (N x K)  特征模态矩阵 (每列为一个模态)
+    num_modes : int  可视化的模态数量
+    multi_plot : bool {True：在一张图中显示多个模态  False：每个模态生成一个单独的 HTML 文件} 
+    output_dir : str  保存输出文件的目录
     """
     num_modes = min(9, emodes.shape[1])
     multi_plot = True
     output_dir="/home/wmy/work/geometry/eigenmodes_vis"
     os.makedirs(output_dir, exist_ok=True)
     
-
     # 如果是多模态模式，先创建子图
     if multi_plot:
         cols = 3
@@ -130,66 +114,63 @@ def visualize_two_mode_beating(
     emodes,
     mode_idx1: int,
     mode_idx2: int,
-    f1: float = 10.0,         # Hz, 模态1频率（α波附近）
-    f2: float = 10.6,         # Hz, 模态2频率（与 f1 接近 -> 产生拍频）
-    gamma: float = 0.8,       # s^-1, 阻尼率（e^{-gamma t}）
+    f1: float = 10.0,         # Hz, 模态1频率
+    f2: float = 10.6,         # Hz, 模态2频率
+    gamma: float = 0.8,       # s^-1, 阻尼率
     duration: float = 2.0,    # s, 动画时长
-    fps: int = 20,            # 帧率（每秒多少帧）
-    amp1: float = 1.0,        # 模态1幅度系数
-    amp2: float = 1.0,        # 模态2幅度系数
+    fps: int = 20,            # 帧率
+    amp1: float = 1.0,        # 模态1幅度
+    amp2: float = 1.0,        # 模态2幅度
     phase1: float = 0.0,      # 模态1初相（rad）
     phase2: float = 0.0,      # 模态2初相（rad）
-    max_frames: int = 120     # 传给可视化函数的最大帧数限制
+    max_frames: int = 120     # 最大帧数限制
 ):
     """
-    生成两个空间模态在接近α频率下的拍频动态，并用已有的
-    visualize_brain_surface_over_time(...) 进行三维动画可视化。
-    这正是论文 Fig. 11 所展示的核心动态：结点线在站立与旋转之间切换。
-
-    参数
-    ----
-    mode_idx1, mode_idx2 : 选择参与拍频的两个空间模态的列索引（从0开始）
-    f1, f2 : 两个模态的振荡频率（Hz），尽量接近以产生清晰的拍频
-    gamma : 阻尼率（s^-1），决定 e^{-gamma t} 的衰减速度
-    duration : 动画总时长（秒）
-    fps : 帧率
-    其余参数为幅度与相位设定
+    可视化两个模态在接近 α 频率下的拍频动态。
+    phase1 / phase2 控制两个模态的初始相位差：
+      - phase2=0      -> 驻波
+      - phase2=π/2    -> 旋转波 / 行波
     """
 
     # 基本时间轴
     num_frames = int(np.round(duration * fps))
-    t = np.linspace(0.0, duration, num_frames, endpoint=False)  # [0, duration)
+    num_frames = min(num_frames, max_frames)   # 限制帧数
+    t = np.linspace(0.0, duration, num_frames, endpoint=False)
 
-    # 取出两个空间模态（每列一个模态），做 L2 归一化，避免尺度不一导致某一模态过强
+    # 取出两个空间模态并 L2 归一化
     m1 = emodes[:, mode_idx1].astype(float)
     m2 = emodes[:, mode_idx2].astype(float)
     m1 = m1 / (np.linalg.norm(m1) + 1e-12)
     m2 = m2 / (np.linalg.norm(m2) + 1e-12)
 
-    # 构造时间因子：衰减 * 余弦振荡
-    # activity(t, v) = e^{-gamma t} * ( amp1 * m1[v] * cos(2π f1 t + phase1) + amp2 * m2[v] * cos(2π f2 t + phase2) )
-    decay = np.exp(-gamma * t)[:, None]  # (T,1)
-    cos1  = np.cos(2 * np.pi * f1 * t + phase1)[:, None]  # (T,1)
-    cos2  = np.cos(2 * np.pi * f2 * t + phase2)[:, None]  # (T,1)
+    # 构造时间因子：衰减 * 余弦振荡（带初相）
+    decay = np.exp(-gamma * t)[:, None]        # (T,1)
+    cos1  = np.cos(2 * np.pi * f1 * t + phase1)[:, None]
+    cos2  = np.cos(2 * np.pi * f2 * t + phase2)[:, None]
 
-    # 组装时空数据 (T, N_vertices)
-    activity_timeseries = decay * (amp1 * cos1 * m1[None, :] + amp2 * cos2 * m2[None, :])
+    # 时空数据 (T, N_vertices)
+    activity_timeseries = decay * (
+        amp1 * cos1 * m1[None, :] +
+        amp2 * cos2 * m2[None, :]
+    )
 
-    # 用你已有的三维动画函数进行可视化
+    # 用已有三维动画函数可视化
     fig = visualize_brain_surface_over_time(
         vertices=vertices,
         faces=faces,
         activity_timeseries=activity_timeseries,
         max_frames=max_frames,
         colorscale=[
-                    [0.0, 'blue'],   # 最小值为蓝色
-                    [0.5, 'white'],  # 中间值为白色
-                    [1.0, 'red']     # 最大值为红色
-            ],
+            [0.0, 'blue'],
+            [0.5, 'white'],
+            [1.0, 'red']
+        ],
     )
-    
+
     fig.write_html("/home/wmy/work/geometry/two_mode_beating.html")
     print("动画已保存：two_mode_beating.html")
+    return fig
+
 
 NFT_PARAMS = dict(
     alpha=50.0,   # s^-1
@@ -198,7 +179,7 @@ NFT_PARAMS = dict(
     tau_se=0.04,  # s
     tau_re=0.04,  # s
     gamma_ee=116.0,  # s^-1
-    r_ee=0.086,      # m
+    r_ee=86.0,      # mm
     Gee=6.8,
     Gei=-8.1,
     GesGse=4.25,
@@ -208,140 +189,273 @@ NFT_PARAMS = dict(
     Ges=1.0       # 仅作比例常数使用
 )
 
-def L_of_omega(omega: complex, alpha: float, beta: float) -> complex:
-    # Eq. (9): L(ω) = (1 - iω/α)^-1 (1 - iω/β)^-1
-    return 1.0 / (1 - 1j*omega/alpha) / (1 - 1j*omega/beta)
+seeds = [
+        # α 波段 (8–12 Hz)
+        2*np.pi*10 - 15j,
+        2*np.pi*9  - 13j,
+        2*np.pi*11 - 13j,
+        2*np.pi*8  - 16j,
+        2*np.pi*12 - 16j,
+        2*np.pi*10 - 11j,
 
-def q2_of_omega(omega: complex, p: dict) -> complex:
-    # Eq. (12): q^2(ω) r_ee^2 = (...)
-    alpha, beta = p['alpha'], p['beta']
-    tau_es, tau_se, tau_re = p['tau_es'], p['tau_se'], p['tau_re']
-    gamma_ee, r_ee = p['gamma_ee'], p['r_ee']
-    Gee, Gei = p['Gee'], p['Gei']
-    GesGse, GesGsrGre, GsrGrs = p['GesGse'], p['GesGsrGre'], p['GsrGrs']
+        # 慢波 (f≈0 Hz, γ≈20 s^-1)
+        2*np.pi*1 - 15j,  # γ≈15
+        2*np.pi*2 - 20j,  # γ≈20
+        2*np.pi*3 - 25j   # γ≈25
+    ]
 
-    L = L_of_omega(omega, alpha, beta)
-    exp_es_se = np.exp(1j * omega * (tau_es + tau_se))
-    exp_es_re = np.exp(1j * omega * (tau_es + tau_re))
+def F_or_T(k2: float, params: dict):
+    #返回公式 F(ω) 和 T(ω)
+    alpha, beta  = params['alpha'], params['beta']
+    tau_es, tau_se, tau_re = params['tau_es'], params['tau_se'], params['tau_re']
+    gamma_ee, r_ee = params['gamma_ee'], params['r_ee']
+    Gee, Gei = params['Gee'], params['Gei']
+    GesGse, GesGsrGre, GsrGrs = params['GesGse'], params['GesGsrGre'], params['GsrGrs']
 
-    num = (1 - 1j*omega/gamma_ee)**2 - (1.0 / (1 - Gei*L)) * (
-        L*Gee
-        + (L**2)*GesGse*exp_es_se
-        + (L**3)*GesGsrGre*exp_es_re / (1 - (L**2)*GsrGrs)
-    )
-    return num / (r_ee**2)  # 返回 q^2(ω)
+    def q2_common(w, use_mp: bool):
+        if use_mp:
+            exp = lambda z: mp.e**(z)
+        else:
+            exp = np.exp
 
-def T_exact(k2: float, omega: complex, p: dict) -> complex:
+        L = 1 / (1 - 1j*w/alpha) / (1 - 1j*w/beta)
+        exp_es_se = exp(1j * w * (tau_es + tau_se))
+        exp_es_re = exp(1j * w * (tau_es + tau_re))
+        num = (1 - 1j*w/gamma_ee)**2 - (1.0 / (1 - Gei*L)) * (
+            L*Gee
+            + ((L**2)*GesGse*exp_es_se + (L**3)*GesGsrGre*exp_es_re) / (1 - (L**2)*GsrGrs)
+        )
+        return num / (r_ee**2)  # q^2(ω)
+
+    def F_mp(w):
+        q2 = q2_common(w, use_mp=True)
+        return k2 + q2
+    
+    def T_exact(omega):
+        q2 = q2_common(omega, use_mp=False)
+        denom = k2 * r_ee**2 + q2 * r_ee**2
+        return 1.0 / denom
+
+    return F_mp, T_exact
+
+#==========多项式求根==========#
+
+def fit_rational_T_pade(
+    k2: float,
+    n: int = 14,          # 分母阶
+    m: int = 8,           # 分子阶 (m < n)
+    f_max_hz: float = 40.0,
+    num_samples: int = 2000,
+    weight_alpha: float = 1.0,  # α 带权重（>1 可加强 8–13Hz）
+):
     """
-    Eq. (11): T(k,ω) = [L^2 * Ges * Gsn * e^{iω τ_es} / ((1-L^2 Gsr Grs)(1-Gei L))] * 1/(k^2 r_ee^2 + q^2(ω) r_ee^2)
-    常数前因子只影响幅度，不影响极点位置。我们可直接用 1 / (k^2 + q^2(ω)) 的结构来拟合。
+    拟合 T(ω) ≈ N(s)/D(s)，s=-iω。
+    返回 (A, B)，A.shape=(n+1,), B.shape=(m+1,)
+    且 A[0] 固定为 1（归一化）；A, B 全为实数（KK/因果性约束）。
     """
-    r_ee = p['r_ee']
-    q2 = q2_of_omega(omega, p)
-    denom = (k2 * r_ee**2 + q2 * r_ee**2)
-    if denom == 0:
-        return np.inf
-    # 只保留极点结构（分母）；前因子省略不改变极点
-    return 1.0 / denom
+    # 频率采样
+    w = np.linspace(1e-3, 2*np.pi*f_max_hz, num_samples)  # rad/s
+    F, T_exact = F_or_T(k2, NFT_PARAMS)
+    T_vals = np.array([T_exact(wi) for wi in w], dtype=complex)
+    s = -1j * w
 
-# ====== (b) 用式(18)思路拟合分母多项式（等价拟合 1/T）======
-def fit_denominator_poly_via_least_squares(
+    # 权重（可对 α 带加权）
+    if weight_alpha != 1.0:
+        f = w / (2*np.pi)
+        wts = np.ones_like(w)
+        wts[(f >= 8.0) & (f <= 13.0)] = weight_alpha
+    else:
+        wts = np.ones_like(w)
+
+    # 构建设计矩阵（实部/虚部拆开；未知量是 real B[0..m], real A[1..n]）
+    # 方程：sum_p B_p s^p - T * (A_0 + sum_{q>=1} A_q s^q) = 0,  A_0=1
+    # => sum_p B_p s^p - T - T * sum_{q>=1} A_q s^q = 0
+    A0 = 1.0
+    # 组装实值最小二乘： [Re, Im] 两倍点数
+    M = 2*len(w)
+    K = (m+1) + n  # B[m+1] + A[1..n] 共 m+1 + n 个未知
+    Mtx = np.zeros((M, K), dtype=float)
+    rhs = np.zeros((M,), dtype=float)
+
+    # 预先构造幂
+    Sp = np.vstack([s**p for p in range(m+1)]).T      # (num_samples, m+1)
+    Sq = np.vstack([s**q for q in range(1, n+1)]).T   # (num_samples, n)
+
+    # 左边：sum_p B_p s^p - T - T*sum_{q>=1} A_q s^q = 0
+    # -> 实部行
+    row = 0
+    for t in range(len(w)):
+        # 列顺序：B[0..m] | A[1..n]
+        # 实部: Re(Sp) * B  - Re(T)  - Re(T*Sq) * A_tail = 0
+        # 虚部: Im(Sp) * B  - Im(T)  - Im(T*Sq) * A_tail = 0
+        Sp_t = Sp[t]
+        Sq_t = Sq[t]
+        Tt = T_vals[t]
+        Tsq = Tt * Sq_t  # 逐 q 项
+
+        wt = wts[t]
+        # 实部
+        Mtx[row, 0:(m+1)]  =  np.real(Sp_t) * wt
+        Mtx[row, (m+1):]   = -np.real(Tsq) * wt
+        rhs[row]           =  np.real(Tt) * wt  # 移项：= Re(T)
+        row += 1
+        # 虚部
+        Mtx[row, 0:(m+1)]  =  np.imag(Sp_t) * wt
+        Mtx[row, (m+1):]   = -np.imag(Tsq) * wt
+        rhs[row]           =  np.imag(Tt) * wt
+        row += 1
+
+    # 解实数最小二乘
+    x, *_ = np.linalg.lstsq(Mtx, rhs, rcond=None)
+    B = x[0:(m+1)]
+    A_tail = x[(m+1):]              # A[1..n]
+    A = np.empty(n+1, dtype=float)
+    A[0] = A0
+    A[1:] = A_tail
+    return A, B
+
+def poles_from_rational_den(A: np.ndarray):
+    """
+    D(s) = sum_{q=0}^n A_q s^q, A 实系数。
+    返回 ω_j = i s_j （复频率）。
+    """
+    coeffs = A[::-1]    # np.roots 最高次在前
+    s_roots = np.roots(coeffs)
+    omega_roots = 1j * s_roots
+    return omega_roots
+
+def eigenfreqs_via_eq18_pade(
     k2: float,
     params: dict,
     n: int = 14,
-    w_max_hz: float = 40.0,
-    num_samples: int = 2000
-) -> np.ndarray:
-    """
-    在实频轴 [0, w_max] 上采样精确 T(k, ω)，
-    用复数最小二乘拟合： 1/T(ω) ≈ sum_{q=0}^{n} A_q * (-i ω)^q
-    返回 A（长度 n+1），多项式变量为 s = (-i ω)
-    注：只要分母拟合得好，其根（在复平面）就是 T 的极点。
-    """
-    w = np.linspace(1e-3, 2*np.pi*w_max_hz, num_samples)  # rad/s
-    T_vals = np.array([T_exact(k2, wi, params) for wi in w], dtype=complex)
-    Y = 1.0 / T_vals  # 目标：分母多项式值（可差个比例常数不影响根）
-    # 构造范德蒙德矩阵 V_{t,q} = (-i ω_t)^q
-    s = -1j * w
-    V = np.vstack([s**q for q in range(n+1)]).T  # shape (num_samples, n+1)
-    # 复数最小二乘
-    A, *_ = lstsq(V, Y, rcond=None)
-    return A  # A[0] + A[1] s + ... + A[n] s^n
+    m: int = 8,
+    f_max_hz: float = 40.0,
+    num_samples: int = 2000,
+    weight_alpha: float = 1.0
+):
 
-def poles_from_den_poly(A: np.ndarray) -> np.ndarray:
-    """
-    已有分母多项式 D(s) = sum_{q=0}^n A_q s^q, 变量 s = (-i ω)。
-    求 D(s)=0 的根 s_j，然后映射回 ω_j = i * s_j。
-    """
-    # numpy 根求解默认最高次在前，这里先翻转系数顺序
-    coeffs = A[::-1]  # 最高次到常数项
-    s_roots = np.roots(coeffs)
-    omega_roots = 1j * s_roots
-    return omega_roots  # 复频率 ω = Ω - i γ
-
-def eigenfreqs_via_eq18_for_mode(
-    k2: float,
-    params: dict = NFT_PARAMS,
-    n: int = 14,
-    w_max_hz: float = 40.0,
-    num_samples: int = 2000
-) -> List[Tuple[float, float, complex]]:
-    """
-    对单个空间模态（给定 k^2）：
-    1) 采样真实 T
-    2) 用式(18)思路拟合分母多项式
-    3) 求根得到极点（频率与阻尼）
-    返回列表 [(f_Hz, gamma_s^-1, omega_complex), ...]，按阻尼从小到大排序。
-    """
-    A = fit_denominator_poly_via_least_squares(k2, params, n=n, w_max_hz=w_max_hz, num_samples=num_samples)
-    roots = poles_from_den_poly(A)
-
+    A, B = fit_rational_T_pade(k2, n=n, m=m, f_max_hz=f_max_hz,
+                               num_samples=num_samples, weight_alpha=weight_alpha)
+    roots = poles_from_rational_den(A)
     out = []
     for w in roots:
-        # 只保留稳定极点（Im(ω) < 0）
         if np.imag(w) < 0:
-            f = abs(np.real(w))/(2*np.pi)  # Hz
-            gamma = -np.imag(w)           # s^-1
-            out.append((f, gamma, w))
-    out.sort(key=lambda x: x[1])  # 阻尼从小到大（更主导在前）
+            f = abs(np.real(w))/(2*np.pi)
+            g = -np.imag(w)
+            # print(f"  ω=({np.real(w):.3f})+i({np.imag(w):.3f}), f={f:.3f} Hz, γ={g:.3f}")
+            out.append((float(f), float(g), complex(w)))
+    out.sort(key=lambda x: x[1])
     return out
 
-def eigenfreqs_for_modes_via_eq18(evals: np.ndarray, mode_indices: List[int], **kwargs):
-    """
-    批量：对若干模态索引计算 (f, gamma) 列表
-    """
-    res = {}
-    for idx in mode_indices:
-        k2 = max(float(evals[idx]), 0.0)   # 拉普拉斯本征值 ~ k^2
-        res[idx] = eigenfreqs_via_eq18_for_mode(k2, **kwargs)
-    return res
+#==========直接求根==========#
 
-def pick_alpha_or_fallback(vals, band=(8.0, 13.0), wide=(5.0, 20.0)):
-    """
-    从 (f, gamma, ω) 列表中优先挑 α 带(8–13Hz)阻尼最小的一个；
-    若没有 -> 扩大到 5–20Hz；
-    再没有 -> 挑全频里阻尼最小的一个；
-    若列表本身为空 -> 返回一个 None，同时给出清晰的诊断。
-    返回：(f, gamma, ω) 或 None
-    """
-    if not vals:
-        print("[pick_alpha] 没有任何极点（列表为空）。")
+def find_roots_dispersion_direct(k2: float, params: dict, seeds: List[complex]) -> List[Tuple[float, float, complex]]:
+    out, roots = [], []
+    F, T = F_or_T(k2, params)
+    for z0 in seeds:
+        try:
+            w_root = mp.findroot(F, z0)  # 复初值
+            # 合并去重
+            if not any(abs(w_root - z) < 1e-6 for z in roots):
+                roots.append(w_root)
+        except:  # 没收敛就跳过
+            pass
+
+    for w in roots:
+        if mp.im(w) < 0:  # 稳定根
+            f = abs(mp.re(w)) / (2*mp.pi)
+            g = -mp.im(w)
+            out.append((float(f), float(g), complex(w)))
+    out.sort(key=lambda x: x[1])
+    return out
+
+#==========呈现==========#
+
+def pick_root_by_band(cands, lo_hz, hi_hz):
+    if not cands:
         return None
+    band = [x for x in cands if (lo_hz <= x[0] <= hi_hz)]
+    if band:
+        band.sort(key=lambda t: t[1])
+        return (band[0][0], band[0][1])
+    return None
 
-    def in_band(x, lo, hi): return (lo <= x <= hi)
+def compute_sw_alpha_for_modes(evals,mode_indices,params,slow_band=(0.0, 3.5),alpha_band=(8.0, 13.0)):
+    results = {}
+    for midx in mode_indices:
+        k2 = float(evals[midx])
+        print(f"\n[direct scan] MODE {midx}, k^2={k2:.6g}")
+        direct = find_roots_dispersion_direct(k2, params, seeds)
+        sw_d   = pick_root_by_band(direct, slow_band[0], slow_band[1])
+        alpha_d = pick_root_by_band(direct, alpha_band[0], alpha_band[1])
+        print(f"[direct pick] MODE {midx}")
+        if sw_d:
+            print(f"  慢波: f={sw_d[0]:.3f} Hz, γ={sw_d[1]:.3f} s^-1")
+        if alpha_d:
+            print(f"  α 波: f={alpha_d[0]:.3f} Hz, γ={alpha_d[1]:.3f} s^-1")
 
-    # 已经按 gamma 升序排序的话，这里不需要再排序
-    for lo, hi in (band, wide):
-        cand = [t for t in vals if in_band(t[0], lo, hi)]
-        if cand:
-            best = cand[0]
-            print(f"[pick_alpha] 命中频带 {lo}-{hi} Hz: 选 f={best[0]:.3f} Hz, γ={best[1]:.3f} s^-1")
-            return best
+        approx_list = eigenfreqs_via_eq18_pade(k2, params, n=14, m=8,
+                                               f_max_hz=20.0, num_samples=2000)
+        sw_a   = pick_root_by_band(approx_list, slow_band[0], slow_band[1])
+        alpha_a= pick_root_by_band(approx_list, alpha_band[0], alpha_band[1])
+        print(f"[approx pick] MODE {midx}")
+        if sw_a:
+            print(f"  慢波: f={sw_a[0]:.3f} Hz, γ={sw_a[1]:.3f} s^-1")
+        if alpha_a:
+            print(f"  α 波: f={alpha_a[0]:.3f} Hz, γ={alpha_a[1]:.3f} s^-1")
 
-    # 全频最小阻尼
-    best = vals[0]
-    print(f"[pick_alpha] α/宽频带都未命中，改取全频阻尼最小: f={best[0]:.3f} Hz, γ={best[1]:.3f} s^-1")
-    return best
+        results[midx] = {"slow": sw_d, "alpha": alpha_d, "k2": k2}
+    return results
+
+def plot_sw_alpha_bars(results, mode_order, mode_labels=None):
+    if mode_labels is None:
+        mode_labels = [str(m) for m in mode_order]
+
+    fs, gs = [], []   # 慢波
+    fa, ga = [], []   # α波
+    for midx in mode_order:
+        sw = results[midx]["slow"]
+        al = results[midx]["alpha"]
+        fs.append(sw[0] if sw else np.nan)
+        gs.append(sw[1] if sw else np.nan)
+        fa.append(al[0] if al else np.nan)
+        ga.append(al[1] if al else np.nan)
+
+    x = np.arange(len(mode_order))
+    figsize=(8, 3)
+    fig1, axes1 = plt.subplots(1, 2, figsize=figsize, constrained_layout=True)
+    # (a) f_s
+    axes1[0].bar(x, fs)
+    axes1[0].set_xticks(x)
+    axes1[0].set_xticklabels(mode_labels)
+    axes1[0].set_ylabel(r"$f_s$ (Hz)")
+    axes1[0].set_xlabel(r"$\lambda\mu$")
+    axes1[0].set_title("(a) Slow-wave frequency")
+    # (b) γ_s
+    axes1[1].bar(x, gs)
+    axes1[1].set_xticks(x)
+    axes1[1].set_xticklabels(mode_labels)
+    axes1[1].set_ylabel(r"$\gamma_s$ (s$^{-1}$)")
+    axes1[1].set_xlabel(r"$\lambda\mu$")
+    axes1[1].set_title("(b) Slow-wave damping")
+
+    fig2, axes2 = plt.subplots(1, 2, figsize=figsize, constrained_layout=True)
+    # (a) f_α
+    axes2[0].bar(x, fa)
+    axes2[0].set_xticks(x)
+    axes2[0].set_xticklabels(mode_labels)
+    axes2[0].set_ylabel(r"$f_\alpha$ (Hz)")
+    axes2[0].set_xlabel(r"$\lambda\mu$")
+    axes2[0].set_title("(a) Alpha frequency")
+    # (b) γ_α
+    axes2[1].bar(x, ga)
+    axes2[1].set_xticks(x)
+    axes2[1].set_xticklabels(mode_labels)
+    axes2[1].set_ylabel(r"$\gamma_\alpha$ (s$^{-1}$)")
+    axes2[1].set_xlabel(r"$\lambda\mu$")
+    axes2[1].set_title("(b) Alpha damping")
+
+    return (fig1, fig2)
 
 def main():
     # 设置数据目录
@@ -361,21 +475,39 @@ def main():
     np.savetxt("/home/wmy/work/geometry/eigenmodes.txt", emodes)
     visualize_surface_eigenmodes(vertices, faces, emodes)
 
-    mode_idx1, mode_idx2 = 1, 2
-    res = eigenfreqs_for_modes_via_eq18(evals, [mode_idx1, mode_idx2], params=NFT_PARAMS, n=14, w_max_hz=40.0)
-    f1, g1, _ = pick_alpha_or_fallback(res[mode_idx1])
-    f2, g2, _ = pick_alpha_or_fallback(res[mode_idx2])
-    gamma = 0.5*(g1 + g2)
+    '''if (alpha_results[2] is None) or (alpha_results[3] is None):
+        raise RuntimeError("直接法未找到 α 根，请检查参数/单位。")
+    else:
+        print(f"\n[direct α-pick] MODE 2: f={alpha_results[2][0]:.3f} Hz, γ={alpha_results[2][1]:.3f} s^-1")
+        print(f"\n[direct α-pick] MODE 3: f={alpha_results[3][0]:.3f} Hz, γ={alpha_results[3][1]:.3f} s^-1")'''
 
+    mode_order = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    mode_labels = ["00","1−1","10","11","2−2","2−1","20","21","22"]
+    results = compute_sw_alpha_for_modes(evals, mode_order, NFT_PARAMS)
+    fig_slow, fig_alpha = plot_sw_alpha_bars(results, mode_order, mode_labels)
+    fig_slow.savefig("fig6_like_slow.png", dpi=200)
+    fig_alpha.savefig("fig7_like_alpha.png", dpi=200)
+    plt.show()
+
+    '''f1, g1 = alpha_results[2]
+    f2, g2 = alpha_results[3]
+    gamma = 0.5*(g1 + g2)  # 使用真实阻尼；你也可以用 min(g1, g2)
+
+    # —— 放慢播放—— #
+    fB = abs(f2 - f1)                         # 拍频
+    duration = max(3.0/max(fB, 1e-6), 30.0)   # 至少覆盖 ~3 个拍频周期
+    fps = 10                                  # 降低帧率
+    max_frames = min(int(duration * fps), 30) 
+
+    # —— 非零相位差才能看到旋转/行波 —— #
     visualize_two_mode_beating(
         vertices=vertices, faces=faces, emodes=emodes,
-        mode_idx1=mode_idx1, mode_idx2=mode_idx2,
-        f1=f1,      # 第一个模态频率
-        f2=f2,      # 第二个模态频率
-        gamma=gamma,    # 阻尼率
-        duration=1.0, # 动画时长
-        fps=20,       # 帧率
-    )
+        mode_idx1=2, mode_idx2=3,
+        f1=f1, f2=f2,gamma=gamma,
+        duration=duration,fps=fps,
+        phase1=0.0, phase2=np.pi/2,
+        max_frames=max_frames
+    )'''
 
 if __name__ == "__main__":
     main()
