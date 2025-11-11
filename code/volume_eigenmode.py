@@ -16,7 +16,7 @@ from scipy.ndimage import gaussian_filter,binary_dilation
 
 def mask_to_tetmesh_gmsh(mask, mask_img, max_cell_size=2.0, gmsh_path="gmsh"):
     #tmp_dir = tempfile.mkdtemp()
-    data_dir = "/home/wmy/geometry/result/volume_modes"
+    data_dir = "/home/wmy/work/geometry/result/volume_modes"
     stl_surface = os.path.join(data_dir, "surface.stl")
     geo_file = os.path.join(data_dir, "surface.geo")
     tetra_file = os.path.join(data_dir, "surface.tetra.vtk")

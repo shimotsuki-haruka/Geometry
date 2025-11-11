@@ -719,8 +719,6 @@ def main():
     #fig.show()
     #fig.write_html("brain_activity_over_time.html")
 
- 
-
     
     # 加载和可视化核团
     print("\n正在生成核团可视化...")
@@ -739,7 +737,6 @@ def main():
     
     # 如果需要可视化所有核团的 3D 模型和活动
     # visualize_all_nuclei(resting_data_dir, struct_data_dir)
-
 
 if __name__ == "__main__":
     main()

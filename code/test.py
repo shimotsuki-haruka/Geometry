@@ -2,6 +2,9 @@ import os
 import nibabel as nib
 import numpy as np
 import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+import scipy.io as sio
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from lapy import TetMesh, Solver
 from volume_eigenmode import visualize_volume_eigenmodes_mesh
 from skimage import measure
@@ -9,6 +12,7 @@ from skimage.measure import marching_cubes
 from nilearn import plotting, image
 from skimage import measure
 from nibabel.affines import apply_affine
+
 
 def view_striatum_middle(wmparc_path, t1w_path=None, output_dir="."):
     """
@@ -198,17 +202,303 @@ def vis_mask():
     print(f"Saved: {os.path.abspath(out_html)}")
 
 
+def _load_LH_native_timeseries_and_surface(resting_dir: str, struct_dir: str, sub: str):
+    """
+    返回：
+      Y_TxV : (T, V_all)  —— LH native.func.gii 的全部顶点时序（不去 medial wall）
+      V     : (V_all, 3)  —— LH white.native.surf.gii 顶点
+      F     : (F_all, 3)  —— LH white.native.surf.gii 面
+      m     : (V_all,)    —— atlasroi 掩膜(仅打印校验，不用于裁剪)
+    """
+    # 时序（dense vertex-wise, 不裁剪）
+    func_gii = os.path.join(resting_dir,
+        "MNINonLinear/Results/rfMRI_REST1_LR/rfMRI_REST1_LR.L.native.func.gii")
+    g = nib.load(func_gii)
+    Y_TxV = np.vstack([arr.data for arr in g.darrays]).astype(np.float64)  # (T,V_all)
 
+    # 白质表面（你也可以换成 midthickness.native.surf.gii，视觉更接近皮层中层）
+    surf_gii = os.path.join(struct_dir, f"MNINonLinear/Native/{sub}.L.white.native.surf.gii")
+    s = nib.load(surf_gii)
+    V = s.darrays[0].data.astype(np.float64)   # (V_all,3)
+    F = s.darrays[1].data.astype(np.int32)     # (F_all,3)
+
+    # atlasroi（1=有效皮层；0=medial wall 或非皮层）
+    mask_gii = os.path.join(struct_dir, f"MNINonLinear/Native/{sub}.L.atlasroi.native.shape.gii")
+    m = nib.load(mask_gii).darrays[0].data.astype(bool)  # (V_all,)
+
+    # 一致性校验
+    print(f"[TEST] func 顶点数 (V_all)   = {Y_TxV.shape[1]}")
+    print(f"[TEST] surface 顶点数        = {V.shape[0]}")
+    print(f"[TEST] 三角形数 (faces)      = {F.shape[0]}")
+    print(f"[TEST] atlasroi 皮层顶点数   = {int(m.sum())} / {m.size} ({m.sum()/m.size*100:.2f}%)")
+    if Y_TxV.shape[1] != V.shape[0] or V.shape[0] != m.size:
+        raise ValueError("func 顶点数、surface 顶点数、atlasroi 长度不一致。")
+
+    return Y_TxV, V, F, m
+
+def _faces_split_by_medial_wall(F: np.ndarray, mask_cortex: np.ndarray):
+    """
+    输入：
+      F: (F_all,3) 三角面顶点索引
+      mask_cortex: (V_all,) 布尔向量，True=有效皮层；False=medial wall
+    返回：
+      F_cortex: 全部顶点都在皮层的三角面
+      F_medial: 至少有1个顶点在 medial wall 的三角面
+    """
+    # 对每个面，检查三个顶点是否都在皮层
+    all_cortex = mask_cortex[F].all(axis=1)
+    F_cortex = F[all_cortex]
+    F_medial = F[~all_cortex]
+    return F_cortex, F_medial
+
+def _set_axes_equal(ax):
+    """让3D坐标轴比例一致，避免脑表面看起来被拉伸。"""
+    x, y, z = ax.get_xlim3d(), ax.get_ylim3d(), ax.get_zlim3d()
+    xrange = x[1]-x[0]; yrange = y[1]-y[0]; zrange = z[1]-z[0]
+    max_range = max([xrange, yrange, zrange])
+    xmid = np.mean(x); ymid = np.mean(y); zmid = np.mean(z)
+    ax.set_xlim3d([xmid - max_range/2, xmid + max_range/2])
+    ax.set_ylim3d([ymid - max_range/2, ymid + max_range/2])
+    ax.set_zlim3d([zmid - max_range/2, zmid + max_range/2])
+
+def _faces_split_by_medial_wall(F: np.ndarray, cortex_mask: np.ndarray):
+    """
+    F: (F_all,3) int32 三角面顶点索引
+    cortex_mask: (V_all,) bool  True=有效皮层；False=medial wall
+    返回: F_cortex, F_medial
+    """
+    all_cortex = cortex_mask[F].all(axis=1)
+    F_cortex = F[all_cortex]
+    F_medial = F[~all_cortex]
+    return F_cortex, F_medial
+
+def plot_LH_native_with_medial_wall_interactive(
+        V: np.ndarray,
+        F: np.ndarray,
+        mask_atlasroi: np.ndarray,
+        title: str = "LH native (white) — interactive, medial wall highlighted",
+        save_html: str = None):
+    """
+    用 Plotly 交互式 3D 展示左半球 native 表面：
+      - “全部面”(F_all)：浅灰底
+      - “皮层 faces”(F_cortex)：稍深灰
+      - “medial faces”(F_medial)：高亮(红/橙)
+
+    参数
+    ----
+    V: (V_all,3) float 顶点坐标
+    F: (F_all,3) int   三角面顶点索引（0-based）
+    mask_atlasroi: (V_all,) bool   True=有效皮层；False=medial wall
+    title: 图题
+    save_html: 若提供路径，将保存为独立可交互 HTML
+    """
+    V = V.astype(np.float64, copy=False)
+    F = F.astype(np.int32, copy=False)
+    cortex_mask = mask_atlasroi.astype(bool, copy=False)
+
+    # 拆分三角面
+    F_cortex, F_medial = _faces_split_by_medial_wall(F, cortex_mask)
+
+    # 统计信息
+    nV = V.shape[0]
+    nF = F.shape[0]
+    n_ctxV = int(cortex_mask.sum()); n_mwV = nV - n_ctxV
+    n_ctxF = F_cortex.shape[0];      n_mwF = F_medial.shape[0]
+
+    # 底层：全部 faces（浅灰）
+    mesh_all = go.Mesh3d(
+        x=V[:,0], y=V[:,1], z=V[:,2],
+        i=F[:,0], j=F[:,1], k=F[:,2],
+        color="lightgray", opacity=0.20,
+        name=f"All faces (V: {nV}, F: {nF})",
+        showscale=False,
+        hoverinfo="skip",
+        lighting=dict(ambient=0.6, diffuse=0.8, specular=0.05, roughness=0.9),
+        flatshading=True,
+        visible=True
+    )
+
+    # 纯皮层 faces（深一点灰）
+    mesh_ctx = go.Mesh3d(
+        x=V[:,0], y=V[:,1], z=V[:,2],
+        i=F_cortex[:,0] if len(F_cortex) else None,
+        j=F_cortex[:,1] if len(F_cortex) else None,
+        k=F_cortex[:,2] if len(F_cortex) else None,
+        color="gray", opacity=0.55,
+        name=f"Cortex faces (V: {n_ctxV}, F: {n_ctxF})",
+        showscale=False,
+        hoverinfo="skip",
+        lighting=dict(ambient=0.55, diffuse=0.9, specular=0.10, roughness=0.85),
+        flatshading=True,
+        visible=True
+    )
+
+    # medial faces（高亮：红/橙）
+    mesh_med = go.Mesh3d(
+        x=V[:,0], y=V[:,1], z=V[:,2],
+        i=F_medial[:,0] if len(F_medial) else None,
+        j=F_medial[:,1] if len(F_medial) else None,
+        k=F_medial[:,2] if len(F_medial) else None,
+        color="orangered", opacity=0.85,
+        name=f"Medial faces (V: {n_mwV}, F: {n_mwF})",
+        showscale=False,
+        hoverinfo="skip",
+        lighting=dict(ambient=0.45, diffuse=0.9, specular=0.15, roughness=0.8),
+        flatshading=True,
+        visible=True
+    )
+
+    # 视角预设
+    cam_outer = dict(eye=dict(x=1.75, y=-0.4, z=0.4))
+    cam_inner = dict(eye=dict(x=-1.75, y=0.4, z=0.4))
+    cam_top   = dict(eye=dict(x=0.0, y=0.0, z=2.0))
+    cam_bottom= dict(eye=dict(x=0.0, y=0.0, z=-2.0))
+    cam_front = dict(eye=dict(x=0.0, y=2.0, z=0.0))
+    cam_back  = dict(eye=dict(x=0.0, y=-2.0, z=0.0))
+
+    fig = go.Figure(data=[mesh_all, mesh_ctx, mesh_med])
+
+    # 工具栏与布局
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            zaxis=dict(visible=False),
+            aspectmode="data"
+        ),
+        margin=dict(l=0, r=0, t=50, b=0),
+        legend=dict(orientation="h", yanchor="bottom", y=0.02, xanchor="left", x=0.02),
+        updatemenus=[
+            # 显隐切换
+            dict(
+                type="buttons",
+                direction="right",
+                x=0.02, y=1.08, xanchor="left", yanchor="top",
+                buttons=[
+                    dict(label="显示全部", method="update",
+                         args=[{"visible": [True, True, True]}]),
+                    dict(label="只看皮层", method="update",
+                         args=[{"visible": [False, True, False]}]),
+                    dict(label="只看Medial", method="update",
+                         args=[{"visible": [False, False, True]}]),
+                ]
+            ),
+            # 视角切换
+            dict(
+                type="buttons",
+                direction="right",
+                x=0.02, y=1.02, xanchor="left", yanchor="top",
+                buttons=[
+                    dict(label="外侧",   method="relayout", args=[{"scene.camera": cam_outer}]),
+                    dict(label="内侧",   method="relayout", args=[{"scene.camera": cam_inner}]),
+                    dict(label="顶视",   method="relayout", args=[{"scene.camera": cam_top}]),
+                    dict(label="底视",   method="relayout", args=[{"scene.camera": cam_bottom}]),
+                    dict(label="前视",   method="relayout", args=[{"scene.camera": cam_front}]),
+                    dict(label="后视",   method="relayout", args=[{"scene.camera": cam_back}]),
+                ]
+            ),
+        ],
+        # 右上角还有 Plotly 自带的旋转/缩放/重置/保存PNG工具
+    )
+
+    # 初始视角：外侧
+    fig.update_layout(scene_camera=cam_outer)
+
+    # 保存为 HTML（单文件，便于分享/汇报）
+    if save_html is not None:
+        os.makedirs(os.path.dirname(save_html) or ".", exist_ok=True)
+        fig.write_html(save_html, include_plotlyjs="cdn", full_html=True)
+        print(f"[SAVE] interactive HTML -> {save_html}")
+
+    # 打印统计
+    print(f"[INFO] Vertices: cortex={n_ctxV}, medial={n_mwV}, total={nV}")
+    print(f"[INFO] Faces:    cortex={n_ctxF}, medial={n_mwF}, total={nF}")
+
+    return fig
+
+
+def inspect_dtseries(dtseries_path: str):
+    """
+    读取并检查 CIFTI-2 Dense Timeseries (.dtseries.nii) 文件的信息。
+    
+    参数：
+        dtseries_path : str
+            文件路径，如 'subject_rfMRI_REST.dtseries.nii'
+    
+    返回：
+        data : np.ndarray, shape = (T, N)
+            fMRI 时间序列矩阵
+        brain_models : list
+            每个脑区（皮层/亚皮层）模型的信息
+    """
+    # 读取 CIFTI 文件
+    img = nib.load(dtseries_path)
+    data = img.get_fdata(dtype=np.float32)
+    
+    # 获取 header 信息
+    header = img.header
+    cifti_axes = [img.header.get_axis(i) for i in range(img.ndim)]
+    
+    print(f"文件路径: {dtseries_path}")
+    print(f"数据维度: {data.shape}  -> [时间点 × 顶点/体素]")
+    print(f"轴信息:")
+    for i, ax in enumerate(cifti_axes):
+        print(f"  轴 {i}: {type(ax).__name__}")
+        print(f"    长度: {len(ax)}")
+        print(f"    名称: {getattr(ax, 'name', None)}")
+        if hasattr(ax, 'brain_models'):
+            print(f"    包含 {len(ax.brain_models)} 个 brain models:")
+            for bm in ax.brain_models[:4]:  # 打印前几个
+                print(f"      - {bm.brain_structure} ({bm.index_offset}:{bm.index_offset + bm.index_count})")
+    
+    # 获取脑区信息
+    brain_models = []
+    for ax in cifti_axes:
+        if hasattr(ax, 'brain_models'):
+            brain_models = ax.brain_models
+            break
+
+    bm_axis = img.header.get_axis(1)
+
+    # bm_axis.name 是每个灰质点的结构名（长度91282的numpy数组）
+    names = np.asarray(bm_axis.name)
+
+    # 找出左半球索引
+    lh_indices = np.where(names == 'CIFTI_STRUCTURE_CORTEX_LEFT')[0]
+
+    # 提取左半球时间序列
+    lh_ts = data[:, lh_indices]   # shape (1200, 32492)
+    print("左半球索引数量:", len(lh_indices))
+    print("左半球时序形状:", lh_ts.shape)
+
+    return data, brain_models
 
 def main():
-    result = view_striatum_middle(
+    BASE_PATH = "/home/wmy/Documents/"
+    sub = "100307"
+    resting_dir = os.path.join(BASE_PATH, "REST1", sub)
+    struct_dir  = os.path.join(BASE_PATH, "Structure",  sub)
+    
+    '''Y_TxV, V, F, m = _load_LH_native_timeseries_and_surface(resting_dir, struct_dir, sub)
+    fig = plot_LH_native_with_medial_wall_interactive(
+        V, F, m,
+        title=f"{sub} LH native (white) — medial wall highlighted",
+        save_html=f"./{sub}_LH_native_medialwall_interactive.html"
+    )'''
+
+    '''result = view_striatum_middle(
         wmparc_path="/mnt/Structure/100307/MNINonLinear/wmparc.nii.gz",
         t1w_path=None,              # 可指定 T1w；None 表示自动查找
         output_dir="./outputs"      # 输出目录
     )
 
-    print(result)
+    print(result)'''
+
+    data, models = inspect_dtseries("/home/wmy/work/geometry/data/subject_rfMRI_REST.dtseries.nii")
+    #print(data.shape)
     
 if __name__ == "__main__":
     main()
+
 
