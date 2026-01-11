@@ -4,13 +4,13 @@ import nibabel as nib
 import subprocess
 import tempfile
 import pyvista as pv
-import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from lapy import TriaMesh, Solver
 from plotly.subplots import make_subplots
 from matplotlib.colors import LinearSegmentedColormap
 from visualize_brain import load_surface_and_activity
 from brainspace.mesh import mesh_operations, mesh_io
+from scipy.spatial import cKDTree
 os.environ["PYVISTA_OFF_SCREEN"] = "true"
 os.environ["PYVISTA_USE_OSMESA"] = "true"
 
@@ -205,6 +205,57 @@ def draw_surface_bluewhitered_dull_save(surface_to_plot, data_to_plot, hemispher
     plotter.show(screenshot=save_path)
     print(f"[SAVED] surface image -> {save_path}")
 
+def save_mask_via_kdtree(surface_cut, surf_gii_path, mask_out_path,
+                         keep_idx_out_path=None, atol=1e-6):
+    """
+    用 KDTree 将裁剪后的顶点映射回原始 white.native 顶点索引，并保存 0/1 掩膜。
+
+    Parameters
+    ----------
+    surface_cut : BSPolyData
+        brainspace.mesh.mesh_operations.mask_points 的返回对象
+    surf_gii_path : str
+        原始 {sub}.L.white.native.surf.gii 路径
+    mask_out_path : str
+        要写出的 0/1 掩膜 txt（长度=原始顶点数，1=保留）
+    keep_idx_out_path : str|None
+        若给出，则额外保存 “裁剪后顶点 -> 原始顶点号” 的映射 .npy
+    atol : float
+        KDTree 最近邻匹配允许的最大距离提示阈值（单位：与坐标一致）
+    """
+    import os
+    import numpy as np
+    import nibabel as nib
+    from scipy.spatial import cKDTree
+
+    # 原始（未裁剪）white.native 顶点
+    s = nib.load(surf_gii_path)
+    V_orig = s.darrays[0].data.astype(np.float64)          # (V_all, 3)
+
+    # 裁剪后的顶点
+    V_new = np.asarray(surface_cut.Points, dtype=np.float64)  # (V_mask, 3)
+
+    # KDTree 最近邻匹配：每个裁剪后顶点 -> 原始顶点号
+    tree = cKDTree(V_orig)
+    dist, keep_idx = tree.query(V_new, k=1, workers=-1)
+    print(f"[KDTree] matched {V_new.shape[0]} vertices; max|Δ|={float(dist.max()):.3e}")
+
+    if dist.max() > atol:
+        print("[WARN] KDTree max distance > atol; 请确认是否同一空间/精度。")
+
+    # 写出 0/1 掩膜（原始顶点顺序）
+    os.makedirs(os.path.dirname(mask_out_path), exist_ok=True)
+    mask_native = np.zeros(V_orig.shape[0], dtype=int)
+    mask_native[keep_idx] = 1
+    np.savetxt(mask_out_path, mask_native, fmt="%d")
+    print(f"[SAVE] native-space mask -> {mask_out_path} (sum={int(mask_native.sum())})")
+
+    # 可选：写出映射索引
+    if keep_idx_out_path:
+        np.save(keep_idx_out_path, keep_idx)
+        print(f"[SAVE] keep_idx.npy -> {keep_idx_out_path}")
+
+    return keep_idx, mask_native
 
 
 def cal_and_visualize(resting_data_dir, struct_data_dir, sub, masked):
@@ -248,13 +299,28 @@ def cal_and_visualize(resting_data_dir, struct_data_dir, sub, masked):
         print("Polygons[:12]:", surface_cut.Polygons[:12])
         print("Max polygon index:", surface_cut.Polygons.max())
 
+        '''# === 生成并保存对应 mask.txt ===
+        # 说明哪些原始顶点被保留（TriaMesh 用的索引）
+        n_total = len(mask_bool)
+        mask_lapy = np.zeros(n_total, dtype=int)
+        valid_indices = np.unique(tria.t.flatten())
+        mask_lapy[valid_indices] = 1
+        mask_out_path = "/home/wmy/work/geometry/data/mine/fsLR_32k_midthickness-lh_mask.txt"
+        np.savetxt(mask_out_path, mask_lapy, fmt="%d")
+        print(f"[SAVE] Laplacian valid-vertex mask -> {mask_out_path}")
+        print(f"[INFO] Laplacian kept {mask_lapy.sum()} / {n_total} vertices")'''
+
+        mask_out_path = "/home/wmy/work/geometry/data/mine/fsLR_32k_midthickness-lh_mask_reset.txt"
+        keep_idx_out  = "/home/wmy/work/geometry/data/mine/fsLR_32k_midthickness-lh_keep_idx.npy"
+        save_mask_via_kdtree(surface_cut, surf_gii_path, mask_out_path, keep_idx_out_path=keep_idx_out)
+
         evals, emodes = calc_eig_from_vertices_faces(tria, num_modes=200)
         np.savetxt("/home/wmy/work/geometry/eigenvalues_1.txt", evals)
         np.savetxt("/home/wmy/work/geometry/eigenmodes_1.txt", emodes)
 
         visualize_surface_eigenmodes(tria.v, tria.t, emodes)
 
-        for i in range(9):
+        '''for i in range(9):
             draw_surface_bluewhitered_dull_save(
                 surface_to_plot={'vertices': tria.v, 'faces': tria.t},
                 data_to_plot=emodes[:, i],
@@ -262,7 +328,7 @@ def cal_and_visualize(resting_data_dir, struct_data_dir, sub, masked):
                 medial_wall=None,
                 with_medial=True,
                 save_path=f"/home/wmy/work/geometry/result/mode_{i+1:02d}_lh.png"
-            )
+            )'''
 
     else:
         tria = TriaMesh(vertices, faces)

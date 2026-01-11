@@ -10,6 +10,7 @@ Author: adapted for clarity from James Pang et al.
 import os
 import h5py
 import numpy as np
+import nibabel as nib
 import scipy.io as sio
 import matplotlib.pyplot as plt
 from scipy.stats import zscore, pearsonr
@@ -158,6 +159,9 @@ def reconstruct_task_activation_accuracy(
         )
         recon_beta[:mode, mode - 1] = beta[:, 0]
 
+    print(f"[BETA] recon_beta shape: {recon_beta.shape}")
+    print(f"[BETA] β for M={num_modes} (length={num_modes}):")
+    print(recon_beta[:num_modes, num_modes - 1])
     # ============================================================
     # Calculate reconstruction accuracy (vertex-level)
     # ============================================================
@@ -198,7 +202,7 @@ def reconstruct_task_activation_accuracy(
         'recon_corr_parc': recon_corr_parc
     }
 
-def reconstruct_fc_accuracy(hemisphere='lh', num_modes=50,
+def reconstruct_fc_accuracy(hemisphere='lh', num_modes=200,
                             eigenmode_path_template='data/examples/fsLR_32k_midthickness-{hemi}_emode_{K}.txt',
                             fmri_mat_template='data/examples/subject_rfMRI_timeseries-{hemi}.mat',
                             parc_template='data/parcellations/fsLR_32k_{parcname}-{hemi}.txt',
@@ -210,74 +214,149 @@ def reconstruct_fc_accuracy(hemisphere='lh', num_modes=50,
     # --------------------------------------------------------
     # Load eigenmodes
     # --------------------------------------------------------
-    eigenmode_path = eigenmode_path_template.format(hemi=hemisphere, K=num_modes)
-    eigenmodes = np.loadtxt(eigenmode_path)  # (V_ctx × num_modes)
+    if os.path.exists(eigenmode_path_template):
+        eigenmodes = np.loadtxt(eigenmode_path_template)
+    else:
+        eigenmodes = np.loadtxt(eigenmode_path_template.format(hemi=hemisphere, K=num_modes))
+    print(f"[LOAD] Eigenmodes shape: {eigenmodes.shape}")
 
     # --------------------------------------------------------
-    # Load single-subject rfMRI data
+    # Load fMRI data (.mat or .dtseries.nii)
     # --------------------------------------------------------
-    data_to_reconstruct = load_mat_timeseries(fmri_mat_template.format(hemi=hemisphere),varname='timeseries').astype(np.float32)  # (V × T)
+    fmri_path_candidate = fmri_mat_template.format(hemi=hemisphere)
+    # 自动判断路径是否为 .mat 或 .nii
+    if fmri_path_candidate.endswith(".mat"):
+        data_to_reconstruct = load_mat_timeseries(fmri_path_candidate, varname='timeseries').astype(np.float32)
+        print(f"[LOAD] Loaded .mat fMRI timeseries: {data_to_reconstruct.shape}")
+
+    elif fmri_path_candidate.endswith(".func.gii"):
+        print(f"[LOAD] Loading surface fMRI from {fmri_path_candidate}")
+        func_gii = nib.load(fmri_path_candidate)
+        # func.gii 由多个 darrays 构成，每个时间点一个
+        data_to_reconstruct = np.column_stack([arr.data for arr in func_gii.darrays]).astype(np.float32)
+        print(f"[LOAD] Loaded .func.gii fMRI data: {data_to_reconstruct.shape} (vertices × time)")
+
+    elif fmri_path_candidate.endswith(".nii") or fmri_path_candidate.endswith(".dtseries.nii"):
+        fmri_img = nib.load(fmri_path_candidate)
+        data_to_reconstruct = fmri_img.get_fdata().astype(np.float32)
+        # 转置以统一为 (vertices × time)
+        if data_to_reconstruct.shape[0] < data_to_reconstruct.shape[1]:
+            data_to_reconstruct = data_to_reconstruct.T
+        print(f"[LOAD] Loaded .dtseries fMRI data: {data_to_reconstruct.shape}")
+
+    else:
+        raise ValueError(f"Unsupported fMRI format: {fmri_path_candidate}")
+
     V, T = data_to_reconstruct.shape
+
     print(f"[LOAD] Eigenmodes: {eigenmodes.shape}, Timeseries: {data_to_reconstruct.shape}")
 
     # --------------------------------------------------------
-    # Load cortex mask (与 MATLAB 对齐)
+    # Decide whether to use cortex mask
     # --------------------------------------------------------
-    mask_path = f"geodemo/data/template_surfaces_volumes/fsLR_32k_cortex-{hemisphere}_mask.txt"
-    cortex_mask = np.loadtxt(mask_path).astype(bool)
- 
-    # Apply mask to all spatial variables
-    eigen_cortex = eigenmodes[cortex_mask, :]
-    data_cortex = data_to_reconstruct[cortex_mask, :]
+    
+    parc_candidate = parc_template.format(parcname=parc_name, hemi=hemisphere)
+    # 判断是否为 atlas 数据（native 或 dtseries）
+    if (parc_candidate.endswith(".gii")):
+        ''' mask_path = f"work/geometry/data/mine/fsLR_32k_midthickness-lh_mask_reset.txt"
+        cortex_mask = np.loadtxt(mask_path).astype(bool)
+        print(f"[INFO] Using cortex mask: {mask_path}, size={cortex_mask.sum()}")
 
-    # parcellation 也要对应裁剪
-    parc = np.loadtxt(parc_template.format(parcname=parc_name, hemi=hemisphere)).astype(int)
-    if len(parc) != len(cortex_mask):
-        print(f"[WARN] Parcellation length {len(parc)} != mask length {len(cortex_mask)}; applying mask cut.")
-        parc = parc[cortex_mask]
+        eigen_cortex = eigenmodes
+        data_cortex = data_to_reconstruct[cortex_mask, :]'''
+
+        keep = np.load("/home/wmy/work/geometry/data/mine/fsLR_32k_midthickness-lh_keep_idx.npy")  # KDTree保存的 keep_idx (len = V_new)
+        eigen_cortex = eigenmodes                    # 形状 (V_new, K)，按裁剪后顶点顺序
+        data_cortex  = data_to_reconstruct[keep, :]  # (V_new, T)，从原始时序重排到 V_new 顺序
+
+        # 加载 parcellation
+        if parc_template.endswith(".txt"):
+            parc = np.loadtxt(parc_template.format(parcname=parc_name, hemi=hemisphere)).astype(int)
+        elif parc_template.endswith(".gii"):
+            parc_gii = nib.load(parc_template)
+            parc = parc_gii.darrays[0].data.astype(int)
+        else:
+            raise ValueError(f"Unsupported parcellation format: {parc_template}")
+        
+        # parc = parc[cortex_mask]
+        parc = parc[keep]               # (V_new, )，从原始分区重排到 V_new 顺序
+
     else:
+        mask_path = f"geodemo/data/template_surfaces_volumes/fsLR_32k_cortex-{hemisphere}_mask.txt"
+        cortex_mask = np.loadtxt(mask_path).astype(bool)
+        print(f"[INFO] Using cortex mask: {mask_path}, size={cortex_mask.sum()}")
+
+        eigen_cortex = eigenmodes[cortex_mask, :]
+        data_cortex = data_to_reconstruct[cortex_mask, :]
+
+        # parcellation 同样裁剪
+        parc = np.loadtxt(parc_template.format(parcname=parc_name, hemi=hemisphere)).astype(int)
+        if len(parc) != len(cortex_mask):
+            print(f"[WARN] Parcellation length {len(parc)} != mask length {len(cortex_mask)}; applying mask cut.")
+        
         parc = parc[cortex_mask]
 
     # --------------------------------------------------------
-    # Cortex mask (if provided)
-    # --------------------------------------------------------
-    '''if cortex_ind is None:
-        cortex_ind = np.ones(V, dtype=bool)
-    data_cortex = data_to_reconstruct[cortex_ind, :]
-    eigen_cortex = eigenmodes[cortex_ind, :]'''
-
-    # --------------------------------------------------------
-    # Calculate reconstruction beta coefficients (β)
+    # Calculate reconstruction beta coefficients (β) with simple cache
     # recon_beta[k_modes, T, num_modes]
     # --------------------------------------------------------
-    recon_beta = np.zeros((num_modes, T, num_modes), dtype=np.float32)
-    print("[STEP] Calculating reconstruction coefficients β ...")
-    for mode in tqdm(range(1, num_modes + 1)):
-        basis = eigen_cortex[:, :mode]
-        beta = calc_eigendecomposition(data_cortex, basis)
-        recon_beta[:mode, :, mode - 1] = beta
+
+    beta_dir = "geodemo/data/beta"
+    recon_beta = None
+    os.makedirs(beta_dir, exist_ok=True)
+    beta_path = os.path.join(
+        beta_dir,
+        f"recon_beta_{hemisphere}_{num_modes}_{parc_name}.npz"
+    )
+    
+    load_beta = os.path.exists(beta_path)
+    if load_beta:
+        try:
+            z = np.load(beta_path, allow_pickle=False)
+            rb = z["recon_beta"]
+            recon_beta = rb
+            print(f"[CACHE] Loaded recon_beta from {beta_path}")
+        except Exception as e:
+            print(f"[CACHE] Failed to load recon_beta from {beta_path}: {e}")
+
+    if recon_beta is None:    
+        recon_beta = np.zeros((num_modes, T, num_modes), dtype=np.float32)
+        print("[STEP] Calculating reconstruction coefficients β ...")
+        for mode in tqdm(range(1, num_modes + 1)):
+            basis = eigen_cortex[:, :mode]
+            beta = calc_eigendecomposition(data_cortex, basis)
+            recon_beta[:mode, :, mode - 1] = beta
+        np.savez_compressed(beta_path, recon_beta=recon_beta)
+        print(f"[CACHE] Saved recon_beta -> {beta_path}")
 
     # --------------------------------------------------------
     # Parcellation & empirical FC
     # --------------------------------------------------------
-    parc_path = parc_template.format(parcname=parc_name, hemi=hemisphere)
-    parc = np.loadtxt(parc_path).astype(int)
+    '''parc_path = parc_template.format(parcname=parc_name, hemi=hemisphere)
+    parc = np.loadtxt(parc_path).astype(int)'''
+
+
     labels = np.unique(parc[parc > 0])
     P = len(labels)
     triu_ind = calc_triu_ind((P, P))
+
+    len_triu = triu_ind[0].size 
+    print(f"[CHECK] parcels: P={P}, upper-tri length={len_triu}")
 
     print(f"[DEBUG] eigenmodes shape: {eigen_cortex.shape}")
     print(f"[DEBUG] fMRI data shape: {data_cortex.shape}")
     print(f"[DEBUG] parcellation shape: {parc.shape}")
     print(f"[DEBUG] unique labels (>0): {np.unique(parc[parc>0]).size}")
 
+    #==========原因是下面的数据只有parc做mask了！！！！！！！！！！！(已改正，正确复现率93)=================
     # Empirical FC
-    data_parc_emp = calc_parcellate(parc, data_to_reconstruct)
+    data_parc_emp = calc_parcellate(parc, data_cortex) #data_to_reconstruct
     data_parc_emp = calc_normalize_timeseries(data_parc_emp.T)
     data_parc_emp[np.isnan(data_parc_emp)] = 0
     FC_emp = (data_parc_emp.T @ data_parc_emp) / T
     FCvec_emp = FC_emp[triu_ind]
     print(f"[STEP] Empirical FC computed, parcels={P}, vec_len={len(FCvec_emp)}")
+    print(f"[CHECK] FCvec_emp length = {FCvec_emp.size}")
 
     # --------------------------------------------------------
     # Reconstruction + FC accuracy
@@ -287,7 +366,7 @@ def reconstruct_fc_accuracy(hemisphere='lh', num_modes=50,
     print("[STEP] Computing reconstruction accuracy across modes ...")
 
     for mode in tqdm(range(1, num_modes + 1)):
-        recon_temp = eigenmodes[:, :mode] @ recon_beta[:mode, :, mode - 1]  # V×T
+        recon_temp = eigen_cortex[:, :mode] @ recon_beta[:mode, :, mode - 1]  # V×T  eigenmodes
 
         data_parc_recon = calc_parcellate(parc, recon_temp)
         data_parc_recon = calc_normalize_timeseries(data_parc_recon.T)
@@ -449,9 +528,6 @@ def plot_power_spectrum_task(recon_beta, save_path="geodemo/result/power_spectru
         power_spectrum, power_spectrum_norm : ndarray
             功率谱及其归一化形式，形状 (num_modes, 1)
     """
-    import numpy as np
-    import matplotlib.pyplot as plt
-    import os
 
     # ===== 取最后一组（使用所有模态）的 β 系数 =====
     num_modes = recon_beta.shape[0]
@@ -510,6 +586,15 @@ def rest_state():
         parc_template='geodemo/data/parcellations/fsLR_32k_{parcname}-{hemi}.txt',
         parc_name='Glasser360'
     )
+
+    '''results = reconstruct_fc_accuracy(
+        hemisphere='lh',
+        num_modes=200,
+        eigenmode_path_template='/home/wmy/work/geometry/eigenmodes_1.txt',
+        fmri_mat_template='/home/wmy/Documents/REST1/100307/MNINonLinear/Results/rfMRI_REST1_LR/rfMRI_REST1_LR.L.native.func.gii',
+        parc_template='/home/wmy/Documents/Structure/100307/MNINonLinear/Native/100307.L.aparc.a2009s.native.label.gii',
+        parc_name='aparca2009s'
+    )'''
 
     recon_beta = results['recon_beta']
     '''power, power_norm = plot_power_spectrum_at_time(
