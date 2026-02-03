@@ -12,12 +12,12 @@ from scipy import ndimage as ndi
 from skimage.measure import marching_cubes
 
 
-def load_surface_and_activity(resting_data_dir, struct_data_dir):
+def load_surface_and_activity(sub, resting_data_dir, struct_data_dir):
     # 加载左半球表面数据 (functional data)
     surf_left = nib.load(os.path.join(resting_data_dir, 'MNINonLinear/Results/rfMRI_REST1_LR/rfMRI_REST1_LR.L.native.func.gii'))
     
     # 加载左半球表面网格 (structural data - white matter surface, uninflated)
-    surf_mesh_left = nib.load(os.path.join(struct_data_dir, 'MNINonLinear/Native/100307.L.white.native.surf.gii'))
+    surf_mesh_left = nib.load(os.path.join(struct_data_dir, f'MNINonLinear/Native/{sub}.L.white.native.surf.gii'))
     
     # 获取顶点坐标和面片信息
     vertices_left = surf_mesh_left.darrays[0].data  # 顶点坐标
@@ -415,23 +415,25 @@ def extract_nuclei_mesh(struct_data_dir, nuclei_labels):
     for label in nuclei_labels:
         mask[subcortical_data == label] = 1
     
-    '''structure = ndi.generate_binary_structure(3, 2)  # 26连通邻域
+    '''structure = ndi.generate_binary_structure(3, 2) #尝试膨胀后腐蚀，进行连通
     mask = ndi.binary_dilation(mask, structure=structure, iterations=2)
     mask = ndi.binary_erosion(mask, structure=structure, iterations=2)'''
 
     visualize_mask_html(
-    mask_processed=mask,
-    affine=subcortical_img.affine,
-    out_html="nuclei_closed.html",
-    original_mask=None,   # 若不想对比，可传 None
-    title="Original vs Closed"
+        mask_processed=mask,
+        affine=subcortical_img.affine,
+        out_html="nuclei_closed.html",
+        original_mask=None,   # 若不想对比，可传 None
+        title="Original vs Closed"
     )
-    
-    # 获取体素尺寸，用于正确缩放网格
-    voxel_size = subcortical_img.header.get_zooms()
     
     # 使用 marching cubes 算法生成 3D 网格
     verts, faces, _, _ = measure.marching_cubes(mask, level=0.5)
+    
+    '''
+    # 可能存在错误:affine中已经包含了体素尺寸缩放
+    # 获取体素尺寸，用于正确缩放网格
+    voxel_size = subcortical_img.header.get_zooms()
     
     # 应用体素尺寸缩放
     verts = verts * voxel_size
@@ -439,6 +441,9 @@ def extract_nuclei_mesh(struct_data_dir, nuclei_labels):
     # 将顶点坐标转换到世界坐标系
     affine = subcortical_img.affine
     verts_world = np.dot(np.hstack((verts, np.ones((verts.shape[0], 1)))), affine.T)[:, :3]
+    '''
+
+    verts_world = nib.affines.apply_affine(subcortical_img.affine, verts)
     
     return verts_world, faces, subcortical_img, mask
 

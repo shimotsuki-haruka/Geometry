@@ -31,6 +31,21 @@ def calc_eig_from_vertices_faces(tria, num_modes=20):
     """
     fem = Solver(tria)
     evals, emodes = fem.eigs(k=num_modes)
+
+    '''M = fem.mass  # 可能是 scipy.sparse 矩阵
+    Phi = emodes  # (V,K)
+
+    Q = Phi.T @ Phi  # (K,K)
+    QM = Phi.T @ (M @ Phi)   # (K,K)
+    I = np.eye(Phi.shape[1])
+
+    # 误差指标
+    diag_err = np.max(np.abs(np.diag(Q) - 1))
+    offdiag_err = np.max(np.abs(Q - np.diag(np.diag(Q))))
+
+    print("max |diag-1| =", diag_err)
+    print("max |offdiag| =", offdiag_err)'''
+
     return evals, emodes
 
 
@@ -261,7 +276,7 @@ def save_mask_via_kdtree(surface_cut, surf_gii_path, mask_out_path,
 def cal_and_visualize(resting_data_dir, struct_data_dir, sub, masked):
     
     # 加载数据和可视化表面
-    vertices, faces, activity_timeseries = load_surface_and_activity(resting_data_dir, struct_data_dir)
+    vertices, faces, activity_timeseries = load_surface_and_activity(sub, resting_data_dir, struct_data_dir)
     
     if masked:
         # 去除medial wall
@@ -315,8 +330,8 @@ def cal_and_visualize(resting_data_dir, struct_data_dir, sub, masked):
         save_mask_via_kdtree(surface_cut, surf_gii_path, mask_out_path, keep_idx_out_path=keep_idx_out)
 
         evals, emodes = calc_eig_from_vertices_faces(tria, num_modes=200)
-        np.savetxt("/home/wmy/work/geometry/eigenvalues_1.txt", evals)
-        np.savetxt("/home/wmy/work/geometry/eigenmodes_1.txt", emodes)
+        np.savetxt("/home/wmy/work/geometry/eigenvalues_100610.txt", evals)
+        np.savetxt("/home/wmy/work/geometry/eigenmodes_100610.txt", emodes)
 
         visualize_surface_eigenmodes(tria.v, tria.t, emodes)
 
@@ -343,7 +358,7 @@ def main():
     # 设置数据目录
     #BASE_PATH = '/mnt/'
     BASE_PATH = '/home/wmy/Documents/'
-    sub = '100307'
+    sub = '100610'
     resting_data_dir = os.path.join(BASE_PATH, 'REST1', sub)
     struct_data_dir = os.path.join(BASE_PATH, 'Structure', sub)
 

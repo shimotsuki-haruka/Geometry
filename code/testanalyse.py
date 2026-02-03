@@ -627,7 +627,7 @@ def task_state():
         parc_name='Glasser360'
     )
 
-    # 绘制结果（如果需要）
+    # 绘制结果
     plt.figure(figsize=(6, 4))
     plt.plot(np.arange(1, len(results_task['recon_corr_vertex']) + 1),
              results_task['recon_corr_vertex'], 'o-', lw=2, label='Vertex-level')
