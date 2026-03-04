@@ -1,3 +1,6 @@
+#此版本存在计算问题。请使用testanalyse
+#___________________________________
+
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -340,7 +343,7 @@ def main():
     sub = "100307"
     resting_dir = os.path.join(BASE_PATH, "REST1", sub)
     struct_dir  = os.path.join(BASE_PATH, "Structure",  sub)
-    out_dir = os.path.join(BASE_PATH, "work/geometry/results/mode_analyse", f"{sub}.LH")
+    out_dir = os.path.join("work/geometry/results/mode_analyse", f"{sub}.LH")
     os.makedirs(os.path.dirname(out_dir), exist_ok=True)
 
     # emodes_lh: (V_all, K)，与 LH native 顶点顺序一致

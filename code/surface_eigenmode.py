@@ -32,7 +32,8 @@ def calc_eig_from_vertices_faces(tria, num_modes=20):
     fem = Solver(tria)
     evals, emodes = fem.eigs(k=num_modes)
 
-    '''M = fem.mass  # 可能是 scipy.sparse 矩阵
+    '''
+    M = fem.mass  # 可能是 scipy.sparse 矩阵
     Phi = emodes  # (V,K)
 
     Q = Phi.T @ Phi  # (K,K)
@@ -44,8 +45,11 @@ def calc_eig_from_vertices_faces(tria, num_modes=20):
     offdiag_err = np.max(np.abs(Q - np.diag(np.diag(Q))))
 
     print("max |diag-1| =", diag_err)
-    print("max |offdiag| =", offdiag_err)'''
-
+    print("max |offdiag| =", offdiag_err)
+    print("Phi.T @ M @ Phi =", QM)
+    print("Phi.T @ Phi =", Q)
+    '''
+    
     return evals, emodes
 
 
@@ -238,10 +242,6 @@ def save_mask_via_kdtree(surface_cut, surf_gii_path, mask_out_path,
     atol : float
         KDTree 最近邻匹配允许的最大距离提示阈值（单位：与坐标一致）
     """
-    import os
-    import numpy as np
-    import nibabel as nib
-    from scipy.spatial import cKDTree
 
     # 原始（未裁剪）white.native 顶点
     s = nib.load(surf_gii_path)
@@ -274,7 +274,7 @@ def save_mask_via_kdtree(surface_cut, surf_gii_path, mask_out_path,
 
 
 def cal_and_visualize(resting_data_dir, struct_data_dir, sub, masked):
-    
+
     # 加载数据和可视化表面
     vertices, faces, activity_timeseries = load_surface_and_activity(sub, resting_data_dir, struct_data_dir)
     
@@ -325,15 +325,19 @@ def cal_and_visualize(resting_data_dir, struct_data_dir, sub, masked):
         print(f"[SAVE] Laplacian valid-vertex mask -> {mask_out_path}")
         print(f"[INFO] Laplacian kept {mask_lapy.sum()} / {n_total} vertices")'''
 
-        mask_out_path = "/home/wmy/work/geometry/data/mine/fsLR_32k_midthickness-lh_mask_reset.txt"
-        keep_idx_out  = "/home/wmy/work/geometry/data/mine/fsLR_32k_midthickness-lh_keep_idx.npy"
+        OUT_BASE = "/mnt2/wmy/geometry/Eigenmodes/masked"
+        out_dir = os.path.join(OUT_BASE, sub)
+        os.makedirs(out_dir, exist_ok=True)
+        mask_out_path = os.path.join(out_dir, "L.native_mask.txt")
+        keep_idx_out  = os.path.join(out_dir, "L.native_idx.npy")
         save_mask_via_kdtree(surface_cut, surf_gii_path, mask_out_path, keep_idx_out_path=keep_idx_out)
 
         evals, emodes = calc_eig_from_vertices_faces(tria, num_modes=200)
-        np.savetxt("/home/wmy/work/geometry/eigenvalues_100610.txt", evals)
-        np.savetxt("/home/wmy/work/geometry/eigenmodes_100610.txt", emodes)
+        
+        np.savetxt(os.path.join(out_dir, f"eigenvalues_{sub}.txt"), evals)
+        np.savetxt(os.path.join(out_dir, f"eigenmodes_{sub}.txt"), emodes)
 
-        visualize_surface_eigenmodes(tria.v, tria.t, emodes)
+        # visualize_surface_eigenmodes(tria.v, tria.t, emodes)
 
         '''for i in range(9):
             draw_surface_bluewhitered_dull_save(
@@ -346,24 +350,105 @@ def cal_and_visualize(resting_data_dir, struct_data_dir, sub, masked):
             )'''
 
     else:
+        OUT_BASE = "/mnt2/wmy/geometry/Eigenmodes/unmasked"
+        out_dir = os.path.join(OUT_BASE, sub)
+        os.makedirs(out_dir, exist_ok=True)
+
         tria = TriaMesh(vertices, faces)
         evals, emodes = calc_eig_from_vertices_faces(tria, num_modes=200)
-        np.savetxt("/home/wmy/work/geometry/eigenvalues.txt", evals)
-        np.savetxt("/home/wmy/work/geometry/eigenmodes.txt", emodes)
 
-        visualize_surface_eigenmodes(vertices, faces, emodes)
+        np.savetxt(os.path.join(out_dir, f"eigenvalues_{sub}.txt"), evals)
+        np.savetxt(os.path.join(out_dir, f"eigenmodes_{sub}.txt"), emodes)
+
+        # visualize_surface_eigenmodes(vertices, faces, emodes)
     
 
 def main():
     # 设置数据目录
     #BASE_PATH = '/mnt/'
-    BASE_PATH = '/home/wmy/Documents/'
-    sub = '100610'
-    resting_data_dir = os.path.join(BASE_PATH, 'REST1', sub)
-    struct_data_dir = os.path.join(BASE_PATH, 'Structure', sub)
+    # =========================
+    # 批处理配置（直接改这里）
+    # =========================
+    BASE_PATH = "/home/wmy/Documents/"
 
+    # 你当前脚本用的是 REST1 作为“数据所在任务文件夹”
+    # 如果未来你想跑 REST2、REST1_LR/REST1_RL 之类，也可以扩展成列表遍历
+    REST_TASK_DIRNAME = "REST1"
 
-    cal_and_visualize(resting_data_dir, struct_data_dir, sub, masked = True)
+    # 被试选择：
+    # - [] 表示自动扫描 BASE_PATH/REST_TASK_DIRNAME/ 下的所有子目录
+    # - 否则只跑你列出的被试
+    SUBJECTS = []  # or [] for auto-scan
+
+    masked = True
+    RECOMPUTE = False
+    listed = False
+    # =========================
+
+    resting_root = os.path.join(BASE_PATH, REST_TASK_DIRNAME)
+
+    if not os.path.isdir(resting_root):
+        raise FileNotFoundError(f"resting root not found: {resting_root}")
+    
+    if listed:
+        sub_list_path = "/home/wmy/work/geometry/data/subject_list_HCP.txt"  
+
+        with open(sub_list_path, "r", encoding="utf-8") as f:
+            SUBJECTS = [line.strip() for line in f if line.strip() and not line.lstrip().startswith("#")]
+
+    if SUBJECTS:
+        subs = SUBJECTS
+    else:
+        subs = sorted([d for d in os.listdir(resting_root) if os.path.isdir(os.path.join(resting_root, d))])
+
+    n_ok, n_fail = 0, 0
+    for sub in subs:
+        try:
+            resting_data_dir = os.path.join(BASE_PATH, REST_TASK_DIRNAME, sub)
+            struct_data_dir = os.path.join(BASE_PATH, "Structure", sub)
+
+            if not os.path.isdir(resting_data_dir):
+                print(f"[SKIP] missing resting dir: {resting_data_dir}")
+                n_fail += 1
+                continue
+            if not os.path.isdir(struct_data_dir):
+                print(f"[SKIP] missing struct dir: {struct_data_dir}")
+                n_fail += 1
+                continue
+
+            # 让可视化输出按被试分目录（配合上面建议的 HCP_SUBJECT 目录拼接）
+            os.environ["HCP_SUBJECT"] = sub
+
+            if not RECOMPUTE:
+                # 你 eigenmode 计算的主要输出（按你之前的“按被试分目录”建议）
+                if masked:
+                    out_dir = f"/mnt2/wmy/geometry/Eigenmodes/masked/{sub}"
+                else:
+                    out_dir = f"/mnt2/wmy/geometry/Eigenmodes/unmasked/{sub}"
+
+                expected_outputs = [
+                    os.path.join(out_dir, f"eigenvalues_{sub}.txt"),
+                    os.path.join(out_dir, f"eigenmodes_{sub}.txt"),
+                    os.path.join(out_dir, "L.native_mask.txt"),
+                    os.path.join(out_dir, "L.native_idx.npy")
+                ]
+
+                if all(os.path.exists(p) for p in expected_outputs):
+                    print(f"\n[SKIP] sub={sub} (outputs exist, RECOMPUTE=False)")
+                    n_ok += 1
+                    continue
+
+            print("\n" + "=" * 78)
+            print(f"[RUN] sub={sub} resting={resting_data_dir}")
+
+            cal_and_visualize(resting_data_dir, struct_data_dir, sub, masked=masked)
+
+            n_ok += 1
+        except Exception as e:
+            print(f"[FAIL] sub={sub} : {e}")
+            n_fail += 1
+
+    print(f"\nDone. OK={n_ok}, FAIL/SKIP={n_fail}")
 
 if __name__ == "__main__":
     main()

@@ -474,6 +474,80 @@ def inspect_dtseries(dtseries_path: str):
 
     return data, brain_models
 
+def load_subject_list(sub_list_path: str):
+    """读取被试列表文件，忽略空行和 # 注释行"""
+    subs = []
+    with open(sub_list_path, "r", encoding="utf-8") as f:
+        for line in f:
+            s = line.strip()
+            if (not s) or s.lstrip().startswith("#"):
+                continue
+            subs.append(s)
+    return subs
+
+
+def count_valid_subjects_per_task(
+    base_geom: str,
+    tasks: list[str],
+    subjects: list[str],
+    hemi: str = "L",
+    mode: str = "masked",
+    encs: list[str] = ["LR"],
+):
+    """
+    统计：给定 subjects 中，有多少人在每个 task 下存在有效 beta 文件。
+
+    有效定义：存在目录
+        {base_geom}/{TASK}/{SUB}/tfMRI_{TASK}_{ENC}/{HEMI}.native.{mode}_beta.npy
+
+    返回：
+      stats: dict[task] = {
+          "n_valid_subjects": int,
+          "valid_subjects": [sub...],
+          "missing_subjects": [sub...],
+      }
+    同时会打印简要统计。
+    """
+    stats = {}
+
+    for task in tasks:
+        valid = set()
+
+        task_root = os.path.join(base_geom, task)
+        if not os.path.isdir(task_root):
+            stats[task] = {
+                "n_valid_subjects": 0,
+                "valid_subjects": [],
+                "missing_subjects": subjects.copy(),
+            }
+            print(f"[STAT] {task}: task_root missing -> 0 / {len(subjects)}")
+            continue
+
+        for sub in subjects:
+            # 一个被试只要任意 enc 存在一个 beta，就认为该 task 对该 sub 有效
+            ok = False
+            for enc in encs:
+                run_dir = os.path.join(task_root, sub)
+                beta_path = os.path.join(run_dir, f"tfMRI_{task}_{enc}/{hemi}.native.{mode}_beta.npy")
+                if os.path.exists(run_dir):
+                    ok = True
+                    break
+            if ok:
+                valid.add(sub)
+
+        valid_list = sorted(valid)
+        missing_list = [s for s in subjects if s not in valid]
+
+        stats[task] = {
+            "n_valid_subjects": len(valid_list),
+            "valid_subjects": valid_list,
+            "missing_subjects": missing_list,
+        }
+
+        print(f"[STAT] {task}: {len(valid_list)} / {len(subjects)} valid subjects")
+
+    return stats
+
 def main():
     BASE_PATH = "/home/wmy/Documents/"
     sub = "100307"
@@ -495,8 +569,29 @@ def main():
 
     print(result)'''
 
-    data, models = inspect_dtseries("/home/wmy/work/geometry/data/subject_rfMRI_REST.dtseries.nii")
-    #print(data.shape)
+    # data, models = inspect_dtseries("/home/wmy/work/geometry/data/subject_rfMRI_REST.dtseries.nii")
+    # #print(data.shape)
+    BASE_GEOM = "/home/wmy/Documents"          # beta_task.py OUT_ROOT_TMPL 的上级
+    MODE = "masked"                           # "masked" or "unmasked"
+    HEMI = "L"                                # 目前你保存文件是 L.native.*
+    ENCS = ["LR"]
+    TASKS = ["SOCIAL","MOTOR","WM","RELATIONAL","EMOTION","LANGUAGE","GAMBLING"] #
+
+    sub_list_path = "/home/wmy/work/geometry/data/subject_list_HCP.txt"
+    subjects = load_subject_list(sub_list_path)
+
+    stats = count_valid_subjects_per_task(
+        base_geom=BASE_GEOM,
+        tasks=TASKS,
+        subjects=subjects,
+        hemi=HEMI,
+        mode=MODE,
+        encs=ENCS,
+    )
+
+    # 如果你想看某个任务缺失了哪些被试：
+    print(stats["SOCIAL"]["n_valid_subjects"])
+    print(stats["SOCIAL"]["missing_subjects"][:20])
     
 if __name__ == "__main__":
     main()

@@ -6,11 +6,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # ==== 配置：按需改这两行 ====
-NPZ_PATH = "/home/wmy/geodemo/data/beta/recon_beta_lh_200_Glasser360.npz"
-OUT_PNG  = "geodemo/result/beta_glasser360.png"
+# NPZ_PATH = "geodemo/data/beta/recon_beta_lh_200_Glasser360.npz"
+# OUT_PNG  = "geodemo/result/beta_glasser360.png"
+TASK = "SOCIAL"  # 'MOTOR', 'EMOTION', 'GAMBLING', 'LANGUAGE', 'RELATIONAL', 'SOCIAL'
+
+NPZ_PATH = f"work/geometry/results/beta_task_native/100610/lh/{TASK}/LR/beta_all.npy"
+OUT_PNG  = f"work/geometry/results/beta_task_native/100610/lh/{TASK}/LR/beta.png"
 
 # 代表性模态选择：前5 + 中间5 + 后5
-HEAD, CENTER, TAIL = 5, 5, 5    # 如需更少/更多曲线，改这三个数即可
+HEAD, CENTER, TAIL = 1, 0, 0    # 如需更少/更多曲线，改这三个数即可
 CUSTOM_MODES_1BASED = [1]
 
 def _beta_to_2d(beta):
@@ -65,12 +69,14 @@ def pick_modes(K, head=5, center=5, tail=5, custom_1based=None):
 
 def main():
     os.makedirs(os.path.dirname(OUT_PNG) or ".", exist_ok=True)
-
     z = np.load(NPZ_PATH, allow_pickle=False)
-    if "recon_beta" not in z.files:
-        raise KeyError(f"'recon_beta' not in {NPZ_PATH}. Found keys: {z.files}")
-    beta = z["recon_beta"]                  # 形状 (K,T) 或 (K,T,K)
-    beta_2d = _beta_to_2d(beta)             # -> (K,T)
+    if os.path.splitext(NPZ_PATH)[1] == ".npy":
+        beta_2d = z  # 直接是 (K,T)
+    else:
+        if "recon_beta" not in z.files:
+            raise KeyError(f"'recon_beta' not in {NPZ_PATH}. Found keys: {z.files}")
+        beta = z["recon_beta"]                  # 形状 (K,T) 或 (K,T,K)
+        beta_2d = _beta_to_2d(beta)             # -> (K,T)
 
     K, T = beta_2d.shape
     modes = pick_modes(K, HEAD, CENTER, TAIL, CUSTOM_MODES_1BASED)
@@ -86,7 +92,7 @@ def main():
 
     plt.xlabel("time (frames)")
     plt.ylabel("β")
-    plt.title("β(t) for representative modes")
+    plt.title(f"{TASK} β(t)")
     plt.legend(ncol=4, fontsize=9, frameon=False)
     plt.tight_layout()
     plt.savefig(OUT_PNG, dpi=200)
